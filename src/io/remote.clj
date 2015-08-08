@@ -92,9 +92,9 @@
   "Convert local coordinates into board coordinates
 so the unit is centered with its top on the top row of the board.
 Returns shifted unit"
-  [task {:keys [members pivot] :as unit}]
+  [board {:keys [members pivot] :as unit}]
   (when unit 
-    (let [board-width (:width task)
+    (let [board-width (count (first board))
          coords (unit->matrix unit)
          unit-top-row (first coords)
          unit-width (count unit-top-row)
@@ -106,13 +106,9 @@ Returns shifted unit"
       :members (mapv (partial plus offset) members)})))
 
 (defn add-to-board [board {ms :members}]
-  (try (reduce (fn [board {col :x row :y}]
-                (update-in board [row col] inc)) 
-              board ms)
-    (catch NullPointerException _
-      (println "NPE!")
-      (println "board:" board)
-      (println "members:" ms))))
+  (reduce (fn [board {col :x row :y}]
+           (update-in board [row col] inc)) 
+         board ms))
 
 (defn overlaps-anything? 
   "If the unit would get added to the board, would any cells overlap?"
@@ -198,7 +194,7 @@ Returns shifted unit"
   "Does this unit fit within the boundary of the board?"
   [board unit]
   (not (and (every? #(< -1 (:x %) (count (first board))) (:members unit))
-           (every? #(< -1 (:y %)) (:members unit)))))
+           (every? #(<= 0 (:y %) (count board)) (:members unit)))))
 
 (defn bottom-row-reached? [board unit]
   (let [height (count board)]
@@ -216,7 +212,7 @@ Returns shifted unit"
 (defn- stop [state reason]
   (assoc state :running false :status reason))
 
-(defn run-one-command [{:keys [board unit source task seen] :as state} cmd]
+(defn run-one-command [{:keys [board unit source seen] :as state} cmd]
   (cond 
     (nil? unit) (stop state :no-more-units)
     (locking? board unit) (stop state :board-full)
@@ -226,26 +222,26 @@ Returns shifted unit"
               (out-of-bounds? board unit') (stop state :out-of-bounds)
               (or (bottom-row-reached? board unit')
                   (locking? board unit')) (let [board' (add-to-board board unit)
-                                                lines-cleared (count-full-rows board')
-                                                board' (clear-full-rows board')
-                                                unit' (first source)]
-                                            (assoc state 
-                                                   :board board'
-                                                   :unit (spawn-unit task unit')
-                                                   :source (rest source)
-                                                   :lines-cleared (+ lines-cleared (:lines-cleared state))
-                                                   :seen #{}))
+                                                 lines-cleared (count-full-rows board')
+                                                 board' (clear-full-rows board')
+                                                 unit' (first source)] 
+                                             (assoc state 
+                                                    :board board'
+                                                    :unit (spawn-unit board' unit')
+                                                    :source (rest source)
+                                                    :lines-cleared (+ lines-cleared (:lines-cleared state))
+                                                    :seen #{}))
               :else (-> state 
-                      (assoc :unit unit')
-                      (update :seen conj (add-to-board board unit)))))))
+                     (assoc :unit unit')
+                     (update :seen conj (add-to-board board unit)))))))
 
 (defn run-commands 
   "Create sequence of states for each command. Ends if there is an invalid move,
 board is full, commands run out, units run out"
-  [task commands seed]
+  [task seed commands]
   (let [source (create-source task seed)
         board (create-board task)
-        unit (spawn-unit task (first source))] 
+        unit (spawn-unit board (first source))]
     (reductions (fn [state cmd]
                   (let [res (run-one-command state cmd)]
                     (if (not (= :running (:status res)))
@@ -253,7 +249,6 @@ board is full, commands run out, units run out"
                       res))) 
                 {:board board
                  :source (rest source)
-                 :task task
                  :unit unit
                  :lines-cleared 0
                  :status :running
@@ -272,12 +267,66 @@ board is full, commands run out, units run out"
   (keep char->command s))
 
 ;;;;;;;;;;;;;;;;;; genetic algorithm ;;;;;;;;;;;;;;;;;;;;;;;;;;
+(def all-commands {:east east :west west :south-east south-east 
+                   :south-west south-west :rotate-cw rotate-cw 
+                   :rotate-ccw rotate-ccw})
 
-(defn generate-individual [])
+(defn generate-individual [length]
+  (repeatedly length #(rand-nth (keys all-commands))))
 
+(defn fitness [task seed individual]
+  (let [states (run-commands task seed (map all-commands individual))
+        n (count states)
+        res (last states)]
+    (+ n 
+       (* 50 (:lines-cleared res))
+       (if (= :no-more-units (:status res)) 500 0))))
+
+(defn cross-over [a b]
+  (let [[a1 a2] (split-at (rand (count a)) a)
+        [b1 b2] (split-at (rand (count b)) b)]
+    [(concat a1 b2)
+     (concat b1 a2)]))
+
+(defn mutate [individual]
+  (for [cmd individual]
+    (if (< (rand) 0.05)
+      (rand-nth (keys all-commands))
+      cmd)))
+
+(defn run-generation [task seed population]
+  (let [fitnesses (pmap (partial fitness task seed) population)
+        sorted (reverse (sort-by first (map vector fitnesses population)))
+        best-fitness (ffirst sorted)
+        n (count population)
+        good-third (map second (take (int (/ n 3)) sorted))
+        best-individual (first good-third)
+        children (apply concat (pmap cross-over (shuffle good-third) (shuffle good-third)))]
+    (with-meta (concat good-third (map mutate children)) 
+      {:best-fitness best-fitness
+       :best-individual best-individual})))
+(comment
+  (let [seed 0
+        n 100
+        population (repeatedly n #(generate-individual 1000))
+        next-generation (run-generation task seed population)]
+    (-> next-generation meta :best-fitness))
+  
+  
+(require '[incanter 
+           [core :refer [view]] 
+           [charts :as ch]])
+(let [seed 0
+      n 500
+      population (repeatedly n #(generate-individual 1000))] 
+  (def results (map meta (iterate (partial run-generation task seed) population))))
+
+(time (view (ch/xy-plot (range) (map :best-fitness (take 500 results)))))
+(last (map #(dissoc % :seen) (run-commands task 0 (map all-commands (:best-individual (nth results 500))))))
+  )
 (comment
   (def problems (load-problems))
-  (def task (nth problems 2))
+  (def task (nth problems 0))
   (def b (board task))
   (def units (mapv create-unit (:units task)))
   (doseq [[task-idx task] (map vector (range) problems)]
@@ -291,7 +340,7 @@ board is full, commands run out, units run out"
         task (first problems)
         seed (first (:sourceSeeds task))
         seed 0] 
-    (last (run-commands (assoc task :sourceLength 5) (repeatedly #(rand-nth [south-east south-west ])) seed)))
+    (last (run-commands (assoc task :sourceLength 5) seed (repeatedly #(rand-nth [south-east south-west ])))))
   ;; from video
   (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
   (let [

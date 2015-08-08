@@ -7,4 +7,9 @@
   :java-source-paths ["src/main/java"]
   :source-paths ["src/main/clojure"]
   :jvm-opts ["-Xmx1g"]
-  :profiles {:dev {:dependencies []}})
+  :profiles {:dev {:dependencies [[incanter/incanter-core "1.5.5"]
+                                  [incanter/incanter-charts "1.5.5"
+                                   :exclusions [incanter/jfreechart]]
+                                  [chart-utils "1.1.0-SNAPSHOT"
+                                   :exclusions [[org.jzy3d/jzy3d-api]
+                                                [org.jzy3d/jzy3d-jdt-core]]]]}})
