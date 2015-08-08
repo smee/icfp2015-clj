@@ -151,10 +151,20 @@ Returns shifted unit"
   (add-offset unit {:x -1 :y 0}))
 
 (defn south-east [unit]
-  (add-offset unit {:x 1 :y 1}))
+  (let [offsets [{:x 0 :y 1}
+                 {:x 1 :y 1}]
+        f #(plus % (offsets (mod (:y %) 2)))] 
+    (-> unit
+      (update :pivot f)
+      (update :members (partial mapv f)))))
 
 (defn south-west [unit]
-  (add-offset unit {:x -1 :y 1}))
+  (let [offsets [{:x -1 :y 1}
+                 {:x 0 :y 1}]
+        f #(plus % (offsets (mod (:y %) 2)))] 
+    (-> unit
+      (update :pivot f)
+      (update :members (partial mapv f)))))
 
 (defn rotate-cw [{:keys [members pivot] :as unit}]
   (let [pivot-cube (grid->cube pivot)]
@@ -163,15 +173,6 @@ Returns shifted unit"
 (defn rotate-ccw [{:keys [members pivot] :as unit}]
   (let [pivot-cube (grid->cube pivot)]
     (assoc unit :members (for [cell members] (rotate-around pivot cell cube-rotate-ccw)))))
-
-;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
-
-(def W (vec "p'!.03"))
-(def E (vec "bcefy2"))
-(def SW (vec "aghij4"))
-(def SE (vec "lmno 5"))
-(def CW (vec "dqrvz1"))
-(def CCW (vec "kstuwx"))
 
 
 ;;;;;;;;;;;;;;;;;; simulator ;;;;;;;;;;;;;;;;;;;;;;;;
@@ -203,7 +204,6 @@ Returns shifted unit"
       (out-of-bounds? board unit') (reduced :out-of-bounds)
       (or (bottom-row-reached? board unit')
           (locking? board unit')) (let [new-unit (spawn-unit task (first source))] 
-                                    (println "locked!")
                                     (if (locking? board new-unit)
                                       (reduced :board-full)
                                       {:board (add-to-board board unit)
@@ -211,19 +211,31 @@ Returns shifted unit"
                                        :task task
                                        :source (rest source)}))
       :else (do 
-              (print-board (add-to-board board unit'))
               {:board board
                :unit unit'
                :task task
                :source source}))))
 
 (defn run-commands [task commands seed]
-  (let [source (create-source task seed)] 
-    (reduce run-one-command {:board (create-board task)
-                             :source (rest source)
-                             :task task
-                             :unit (spawn-unit task (first source))} commands)))
+  (let [source (create-source task seed)
+        board (create-board task)
+        unit (spawn-unit task (first source))] 
+    (reductions run-one-command {:board board
+                                 :source (rest source)
+                                 :task task
+                                 :unit unit} commands)))
 
+;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
+(def char->command (reduce merge (map (fn [[s cmd]]
+                                        (into {} (map #(vector % cmd) s))) 
+                                      [["p'!.03" west]
+                                       ["bcefy2" east]
+                                       ["aghij4" south-west]
+                                       ["lmno 5" south-east]
+                                       ["dqrvz1" rotate-cw]
+                                       ["kstuwx" rotate-ccw]])))
+(defn string->commands [s]
+  (keep char->command s))
 (comment
   (def problems (load-problems))
   (def task (nth problems 2))
@@ -237,6 +249,15 @@ Returns shifted unit"
                        (print-unit u)) (map unit->matrix (:units task)))))
   
   (let [task (rand-nth problems)
-        task (first problems)] 
-    (run-commands task (repeatedly 20 #(rand-nth [south-east south-west ])) (first (:sourceSeeds task))))
+        task (first problems)
+        task (parse "http://icfpcontest.org/problems/problem_6.json")
+        seed (first (:sourceSeeds task))
+        seed 0] 
+    (run-commands task (repeatedly 20 #(rand-nth [south-east south-west ])) seed))
+  ;; from video
+  (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
+  (let [
+        seed 0
+        commands (string->commands "iiiiiiimimiiiiiimmimiiiimimimmimimimimmeemmimimiimmmmimmimiimimimmimmimeeemmmimimmimeeemiimiimimimiiiipimiimimmmmeemimeemimimimmmmemimmimmmiiimmmiiipiimiiippiimmmeemimiipimmimmipppimmimeemeemimiieemimmmm")] 
+    (print-board (:board (last (run-commands task commands seed)))))
   )
