@@ -52,6 +52,16 @@
     (println))
   (println))
 
+(defn count-full-rows [board]
+  (count (filter (partial every? #{1}) board)))
+
+(defn clear-full-rows [board]
+  (mapv vec
+        (reduce (fn [b row]
+                  (if (every? #{1} row)
+                    (cons (repeat (count row) 0) b)
+                    (concat b [row]))) [] board)))
+
 ;;;;;;;;;;;;;;;; units ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn- unit->matrix [{:keys [members]}]
   (let [max-x (apply max (map :x members))
@@ -95,9 +105,13 @@ Returns shifted unit"
      :members (mapv (partial plus offset) members)}))
 
 (defn add-to-board [board {ms :members}]
-  (reduce (fn [board {col :x row :y}]
-            (update-in board [row col] inc)) 
-          board ms))
+  (try (reduce (fn [board {col :x row :y}]
+                (update-in board [row col] inc)) 
+              board ms)
+    (catch NullPointerException _
+      (println "NPE!")
+      (println "board:" board)
+      (println "members:" ms))))
 
 (defn overlaps-anything? 
   "If the unit would get added to the board, would any cells overlap?"
@@ -198,32 +212,38 @@ Returns shifted unit"
     (map #(mod % (count (:units task))))
     (map #(nth (:units task) %))))
 
+
 (defn run-one-command [{:keys [board unit source task] :as state} cmd]
-  (let [unit' (cmd unit)]
-    (cond
-      (out-of-bounds? board unit') (reduced :out-of-bounds)
-      (or (bottom-row-reached? board unit')
-          (locking? board unit')) (let [new-unit (spawn-unit task (first source))] 
-                                    (if (locking? board new-unit)
-                                      (reduced :board-full)
-                                      {:board (add-to-board board unit)
-                                       :unit new-unit
+  (if (locking? board unit)
+    :board-full
+    (let [unit' (cmd unit)]
+      (cond
+        (out-of-bounds? board unit') :out-of-bounds
+        (or (bottom-row-reached? board unit')
+            (locking? board unit')) (let [board' (add-to-board board unit)
+                                          lines-cleared (count-full-rows board')
+                                          board' (clear-full-rows board')] 
+                                      {:board board'
+                                       :unit (spawn-unit task (first source))
                                        :task task
-                                       :source (rest source)}))
-      :else (do 
-              {:board board
-               :unit unit'
-               :task task
-               :source source}))))
+                                       :source (rest source)
+                                       :lines-cleared (+ lines-cleared (:lines-cleared state))})
+        :else (assoc state :unit unit')))))
 
 (defn run-commands [task commands seed]
   (let [source (create-source task seed)
         board (create-board task)
         unit (spawn-unit task (first source))] 
-    (reductions run-one-command {:board board
-                                 :source (rest source)
-                                 :task task
-                                 :unit unit} commands)))
+    (reductions (fn [state cmd]
+                  (let [res (run-one-command state cmd)]
+                    (if (not (map? res))
+                      (reduced (assoc state :status res))
+                      res))) 
+                {:board board
+                 :source (rest source)
+                 :task task
+                 :unit unit
+                 :lines-cleared 0} commands)))
 
 ;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
 (def char->command (reduce merge (map (fn [[s cmd]]
@@ -236,6 +256,7 @@ Returns shifted unit"
                                        ["kstuwx" rotate-ccw]])))
 (defn string->commands [s]
   (keep char->command s))
+
 (comment
   (def problems (load-problems))
   (def task (nth problems 2))
@@ -250,14 +271,13 @@ Returns shifted unit"
   
   (let [task (rand-nth problems)
         task (first problems)
-        task (parse "http://icfpcontest.org/problems/problem_6.json")
         seed (first (:sourceSeeds task))
         seed 0] 
-    (run-commands task (repeatedly 20 #(rand-nth [south-east south-west ])) seed))
+    (print-board (:board (last (run-commands task (repeatedly #(rand-nth [south-east south-west ])) seed)))))
   ;; from video
   (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
   (let [
         seed 0
         commands (string->commands "iiiiiiimimiiiiiimmimiiiimimimmimimimimmeemmimimiimmmmimmimiimimimmimmimeeemmmimimmimeeemiimiimimimiiiipimiimimmmmeemimeemimimimmmmemimmimmmiiimmmiiipiimiiippiimmmeemimiipimmimmipppimmimeemeemimiieemimmmm")] 
-    (print-board (:board (last (run-commands task commands seed)))))
+    (map (comp print-board :board) (butlast (take-last 5 (run-commands task commands seed)))))
   )
