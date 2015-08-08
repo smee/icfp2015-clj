@@ -222,15 +222,21 @@ Returns shifted unit"
         (or (bottom-row-reached? board unit')
             (locking? board unit')) (let [board' (add-to-board board unit)
                                           lines-cleared (count-full-rows board')
-                                          board' (clear-full-rows board')] 
-                                      {:board board'
-                                       :unit (spawn-unit task (first source))
-                                       :task task
-                                       :source (rest source)
-                                       :lines-cleared (+ lines-cleared (:lines-cleared state))})
+                                          board' (clear-full-rows board')
+                                          unit' (first source)]
+                                      (if (nil? unit')
+                                        :no-more-units
+                                        {:board board'
+                                        :unit (spawn-unit task unit')
+                                        :task task
+                                        :source (rest source)
+                                        :lines-cleared (+ lines-cleared (:lines-cleared state))}))
         :else (assoc state :unit unit')))))
 
-(defn run-commands [task commands seed]
+(defn run-commands 
+  "Create sequence of states for each command. Ends if there is an invalid move,
+board is full, commands run out, units run out"
+  [task commands seed]
   (let [source (create-source task seed)
         board (create-board task)
         unit (spawn-unit task (first source))] 
@@ -273,7 +279,7 @@ Returns shifted unit"
         task (first problems)
         seed (first (:sourceSeeds task))
         seed 0] 
-    (print-board (:board (last (run-commands task (repeatedly #(rand-nth [south-east south-west ])) seed)))))
+    (print-board (:board (last (run-commands (assoc task :sourceLength 5) (repeatedly #(rand-nth [south-east south-west ])) seed)))))
   ;; from video
   (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
   (let [
