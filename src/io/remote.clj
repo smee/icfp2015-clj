@@ -271,16 +271,25 @@ board is full, commands run out, units run out"
                    :south-west south-west :rotate-cw rotate-cw 
                    :rotate-ccw rotate-ccw})
 
+(defn remove-mini-loops [cmds]
+  (map first (remove #{[:east :west]
+                       [:west :east]
+                       [:rotate-cw :rotate-ccw]
+                       [:rotate-ccw :rotate-cw]} (partition 2 1 cmds))))
+
 (defn generate-individual [length]
   (repeatedly length #(rand-nth (keys all-commands))))
 
+
 (defn fitness [task seed individual]
-  (let [states (run-commands task seed (map all-commands individual))
+  (if-let [old-fitness (-> individual meta :fitness)]
+    old-fitness
+    (let [states (run-commands task seed (map all-commands individual))
         n (count states)
         res (last states)]
     (+ n 
        (* 50 (:lines-cleared res))
-       (if (= :no-more-units (:status res)) 500 0))))
+       (if (= :no-more-units (:status res)) 500 0)))))
 
 (defn cross-over [a b]
   (let [[a1 a2] (split-at (rand (count a)) a)
@@ -295,16 +304,16 @@ board is full, commands run out, units run out"
       cmd)))
 
 (defn run-generation [task seed population]
-  (let [fitnesses (pmap (partial fitness task seed) population)
+  (let [population (map remove-mini-loops population)
+        fitnesses (pmap (partial fitness task seed) population)
         sorted (reverse (sort-by first (map vector fitnesses population)))
         best-fitness (ffirst sorted)
         n (count population)
-        good-third (map second (take (int (/ n 3)) sorted))
-        best-individual (first good-third)
-        children (apply concat (pmap cross-over (shuffle good-third) (shuffle good-third)))]
-    (with-meta (concat good-third (map mutate children)) 
+        parents (map #(with-meta (second %) {:fitness (first %)}) (take (int (/ n 3)) sorted))
+        children (apply concat (pmap cross-over (shuffle parents) (shuffle parents)))]
+    (with-meta (concat parents (map mutate children)) 
       {:best-fitness best-fitness
-       :best-individual best-individual})))
+       :best-individual (first parents)})))
 (comment
   (let [seed 0
         n 100
@@ -317,7 +326,7 @@ board is full, commands run out, units run out"
            [core :refer [view]] 
            [charts :as ch]])
 (let [seed 0
-      n 500
+      n 100
       population (repeatedly n #(generate-individual 1000))] 
   (def results (map meta (iterate (partial run-generation task seed) population))))
 
