@@ -93,16 +93,17 @@
 so the unit is centered with its top on the top row of the board.
 Returns shifted unit"
   [task {:keys [members pivot] :as unit}]
-  (let [board-width (:width task)
-        coords (unit->matrix unit)
-        unit-top-row (first coords)
-        unit-width (count unit-top-row)
-        offset-left (count (take-while zero? unit-top-row))
-        offset-right (count (take-while zero? (reverse unit-top-row)))
-        unit-top-width (- unit-width offset-left offset-right)
-        offset {:y 0 :x (- (int (/ (- board-width unit-top-width) 2)) offset-left)}]
-    {:pivot (plus pivot offset)
-     :members (mapv (partial plus offset) members)}))
+  (when unit 
+    (let [board-width (:width task)
+         coords (unit->matrix unit)
+         unit-top-row (first coords)
+         unit-width (count unit-top-row)
+         offset-left (count (take-while zero? unit-top-row))
+         offset-right (count (take-while zero? (reverse unit-top-row)))
+         unit-top-width (- unit-width offset-left offset-right)
+         offset {:y 0 :x (- (int (/ (- board-width unit-top-width) 2)) offset-left)}]
+     {:pivot (plus pivot offset)
+      :members (mapv (partial plus offset) members)})))
 
 (defn add-to-board [board {ms :members}]
   (try (reduce (fn [board {col :x row :y}]
@@ -212,26 +213,31 @@ Returns shifted unit"
     (map #(mod % (count (:units task))))
     (map #(nth (:units task) %))))
 
+(defn- stop [state reason]
+  (assoc state :running false :status reason))
 
-(defn run-one-command [{:keys [board unit source task] :as state} cmd]
-  (if (locking? board unit)
-    :board-full
-    (let [unit' (cmd unit)]
-      (cond
-        (out-of-bounds? board unit') :out-of-bounds
-        (or (bottom-row-reached? board unit')
-            (locking? board unit')) (let [board' (add-to-board board unit)
-                                          lines-cleared (count-full-rows board')
-                                          board' (clear-full-rows board')
-                                          unit' (first source)]
-                                      (if (nil? unit')
-                                        :no-more-units
-                                        {:board board'
-                                        :unit (spawn-unit task unit')
-                                        :task task
-                                        :source (rest source)
-                                        :lines-cleared (+ lines-cleared (:lines-cleared state))}))
-        :else (assoc state :unit unit')))))
+(defn run-one-command [{:keys [board unit source task seen] :as state} cmd]
+  (cond 
+    (nil? unit) (stop state :no-more-units)
+    (locking? board unit) (stop state :board-full)
+    (seen (add-to-board board unit)) (stop state :duplicate-board)
+    :else (let [unit' (cmd unit)]
+            (cond
+              (out-of-bounds? board unit') (stop state :out-of-bounds)
+              (or (bottom-row-reached? board unit')
+                  (locking? board unit')) (let [board' (add-to-board board unit)
+                                                lines-cleared (count-full-rows board')
+                                                board' (clear-full-rows board')
+                                                unit' (first source)]
+                                            (assoc state 
+                                                   :board board'
+                                                   :unit (spawn-unit task unit')
+                                                   :source (rest source)
+                                                   :lines-cleared (+ lines-cleared (:lines-cleared state))
+                                                   :seen #{}))
+              :else (-> state 
+                      (assoc :unit unit')
+                      (update :seen conj (add-to-board board unit)))))))
 
 (defn run-commands 
   "Create sequence of states for each command. Ends if there is an invalid move,
@@ -242,14 +248,16 @@ board is full, commands run out, units run out"
         unit (spawn-unit task (first source))] 
     (reductions (fn [state cmd]
                   (let [res (run-one-command state cmd)]
-                    (if (not (map? res))
-                      (reduced (assoc state :status res))
+                    (if (not (= :running (:status res)))
+                      (reduced res)
                       res))) 
                 {:board board
                  :source (rest source)
                  :task task
                  :unit unit
-                 :lines-cleared 0} commands)))
+                 :lines-cleared 0
+                 :status :running
+                 :seen #{}} commands)))
 
 ;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
 (def char->command (reduce merge (map (fn [[s cmd]]
@@ -262,6 +270,10 @@ board is full, commands run out, units run out"
                                        ["kstuwx" rotate-ccw]])))
 (defn string->commands [s]
   (keep char->command s))
+
+;;;;;;;;;;;;;;;;;; genetic algorithm ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn generate-individual [])
 
 (comment
   (def problems (load-problems))
@@ -279,7 +291,7 @@ board is full, commands run out, units run out"
         task (first problems)
         seed (first (:sourceSeeds task))
         seed 0] 
-    (print-board (:board (last (run-commands (assoc task :sourceLength 5) (repeatedly #(rand-nth [south-east south-west ])) seed)))))
+    (last (run-commands (assoc task :sourceLength 5) (repeatedly #(rand-nth [south-east south-west ])) seed)))
   ;; from video
   (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
   (let [
