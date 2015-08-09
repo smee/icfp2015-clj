@@ -186,6 +186,27 @@ Returns shifted unit"
   (let [pivot-cube (grid->cube pivot)]
     (assoc unit :members (for [cell members] (rotate-around pivot cell cube-rotate-ccw)))))
 
+;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
+(def all-commands {:east east :west west :south-east south-east 
+                   :south-west south-west :rotate-cw rotate-cw 
+                   :rotate-ccw rotate-ccw})
+
+(defn remove-mini-loops [cmds]
+  (map first (remove #{[:east :west]
+                       [:west :east]
+                       [:rotate-cw :rotate-ccw]
+                       [:rotate-ccw :rotate-cw]} (partition 2 1 cmds))))
+(def char->command (reduce merge (map (fn [[s cmd]]
+                                        (into {} (map #(vector % cmd) s))) 
+                                      [["p'!.03" west]
+                                       ["bcefy2" east]
+                                       ["aghij4" south-west]
+                                       ["lmno 5" south-east]
+                                       ["dqrvz1" rotate-cw]
+                                       ["kstuwx" rotate-ccw]])))
+(defn string->commands [s]
+  (keep char->command s))
+
 
 ;;;;;;;;;;;;;;;;;; simulator ;;;;;;;;;;;;;;;;;;;;;;;;
 (defn locking? [board unit]
@@ -258,28 +279,10 @@ board is full, commands run out, units run out"
                     res))) 
               (initial-state task seed) commands))
 
-;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
-(def char->command (reduce merge (map (fn [[s cmd]]
-                                        (into {} (map #(vector % cmd) s))) 
-                                      [["p'!.03" west]
-                                       ["bcefy2" east]
-                                       ["aghij4" south-west]
-                                       ["lmno 5" south-east]
-                                       ["dqrvz1" rotate-cw]
-                                       ["kstuwx" rotate-ccw]])))
-(defn string->commands [s]
-  (keep char->command s))
+
 
 ;;;;;;;;;;;;;;;;;; genetic algorithm ;;;;;;;;;;;;;;;;;;;;;;;;;;
-(def all-commands {:east east :west west :south-east south-east 
-                   :south-west south-west :rotate-cw rotate-cw 
-                   :rotate-ccw rotate-ccw})
 
-(defn remove-mini-loops [cmds]
-  (map first (remove #{[:east :west]
-                       [:west :east]
-                       [:rotate-cw :rotate-ccw]
-                       [:rotate-ccw :rotate-cw]} (partition 2 1 cmds))))
 
 (defn generate-individual [length]
   (repeatedly length #(rand-nth (keys all-commands))))
@@ -343,18 +346,25 @@ board is full, commands run out, units run out"
   true)
 
 (defn- find-applicable-commands [commands unit last-command]
-  (if (nil? last-command)
-    (set (keys all-commands))
-    (let [cs (set commands)
-          cs (condp = last-command
-               :west (disj cs :east)
-               :east (disj cs :west)
-               :rotate-cw (disj cs :rotate-ccw)
-               :rotate-ccw (disj cs :rotate-cw)
-               cs)]
-      (if (rotational-symmetric? unit)
-       (disj cs :rotate-cw :rotate-ccw)
-       cs))))
+  (sort-by
+    {:south-east 0
+     :south-west 0
+     :east 1
+     :west 1
+     :rotate-cw 2
+     :rotate-ccw 2}
+    (if (nil? last-command)
+     (keys all-commands)
+     (let [cs (set commands)
+           cs (condp = last-command
+                :west (disj cs :east)
+                :east (disj cs :west)
+                :rotate-cw (disj cs :rotate-ccw)
+                :rotate-ccw (disj cs :rotate-cw)
+                cs)]
+       (if (rotational-symmetric? unit)
+        (disj cs :rotate-cw :rotate-ccw)
+        cs)))))
 
 (defn generate-via-backtracking [task seed max-steps]
   (let [cmds (list)
@@ -384,7 +394,7 @@ board is full, commands run out, units run out"
                            :height 5 
                            :units [{:members [{:x 0, :y 0}],
                                     :pivot {:x 0, :y 0}}]))
-  (time (def cmds (generate-via-backtracking task seed 1000)))
+  (time (def cmds (generate-via-backtracking task seed 500)))
   (println (count cmds))
   (let [s (last (run-commands task seed cmds))] 
     (println "cleared:" (:lines-cleared s))
