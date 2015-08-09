@@ -1,5 +1,6 @@
 (ns io.remote
   (:require [clojure.data.json :as json]
+            [clojure.set :as sets]
             [clj-http.client :as http]
             [clojure.java.io :as io]))
 
@@ -340,9 +341,10 @@ board is full, commands run out, units run out"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;; backtracking ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn- rotational-symmetric? [unit]
   true)
+
 (defn- find-applicable-commands [commands unit last-command]
   (if (nil? last-command)
-    (keys all-commands)
+    (set (keys all-commands))
     (let [cs (set commands)
           cs (condp = last-command
                :west (disj cs :east)
@@ -350,36 +352,41 @@ board is full, commands run out, units run out"
                :rotate-cw (disj cs :rotate-ccw)
                :rotate-ccw (disj cs :rotate-cw)
                cs)]
-      (vec (if (rotational-symmetric? unit)
-            (disj cs :rotate-cw :rotate-ccw)
-            cs)))))
+      (if (rotational-symmetric? unit)
+       (disj cs :rotate-cw :rotate-ccw)
+       cs))))
 
 (defn generate-via-backtracking [task seed max-steps]
-  (loop [cmds (list)
-         stack (list (initial-state task seed)) 
-         n 0] 
-    (if (= n max-steps)
-      (reverse cmds)
-      (let [state (first stack)
-            last-cmd (first cmds)
-            next-cmd (rand-nth (find-applicable-commands (keys all-commands) (:unit state) last-cmd))] 
-        (condp = (:status state)
-          :no-more-units (reverse cmds) ;done
-          :board-full (recur (pop cmds) (pop stack) (inc n)) ;done or backtrack? tricky...
-          :duplicate-board (recur (pop cmds) (pop stack) (inc n))
-          :out-of-bounds (recur (pop cmds) (pop stack) (inc n))
-          ; else run next random command
-          (recur (conj cmds next-cmd)
-                 (conj stack (run-one-command state (all-commands next-cmd)))
-                 (inc n)))))))
+  (let [cmds (list)
+        tried (list #{})
+        stack (list ) 
+        f (fn find-next-command [state last-cmd n]
+            (if (= n max-steps)
+              :done
+              (some (fn [cmd] ;(println n "trying" cmd)
+                      (let [state (run-one-command state (all-commands cmd))]
+;                        (println "status:" (:status state))
+                        (condp = (:status state)
+                          :no-more-units (list cmd) ;done
+                          :board-full nil ;done or backtrack? tricky...
+                          :duplicate-board nil
+                          :out-of-bounds nil
+                          (let [res (find-next-command state cmd (inc n))] 
+                            (condp = res 
+                              nil nil
+                              :done (list cmd)
+                              (conj res cmd)))))) 
+                   (find-applicable-commands (keys all-commands) (:unit state) last-cmd))))]
+    (f (initial-state task seed) nil 0)))
 
 (comment
   (def trivial-task (assoc task :width 2 
                            :height 5 
                            :units [{:members [{:x 0, :y 0}],
                                     :pivot {:x 0, :y 0}}]))
-  (time (def cmds (generate-via-backtracking trivial-task seed 10000)))
-  (let [s (last (run-commands trivial-task seed cmds))] 
+  (time (def cmds (generate-via-backtracking task seed 1000)))
+  (println (count cmds))
+  (let [s (last (run-commands task seed cmds))] 
     (println "cleared:" (:lines-cleared s))
     (print-board (add-to-board (:board s) (:unit s))))
   )
