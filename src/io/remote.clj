@@ -45,10 +45,10 @@
             0)))))
 
 (defn print-board [board]
-  (doseq [[i row] (with-index board) :let [odd? (= 1 (mod i 2))]]
-    (when odd? (print "  ")) ; two space because my font seems to be proportional :(
+  (doseq [[i row] (with-index board)]
+    (when (= 1 (mod i 2)) (print "  ")) ; two space because my font seems to be proportional :(
     (doseq [cell row]
-      (print ([\u2B21 \u2B22] cell) ""))
+      (print ([\u2B21 \u2B22 \u26A1] cell) ""))
     (println))
   (println))
 
@@ -235,24 +235,27 @@ Returns shifted unit"
                      (assoc :unit unit')
                      (update :seen conj (add-to-board board unit)))))))
 
+(defn initial-state [task seed]
+  (let [source (create-source task seed)
+        board (create-board task)
+        unit (spawn-unit board (first source))]
+    {:board board
+     :source (rest source)
+     :unit unit
+     :lines-cleared 0
+     :status :running
+     :seen #{}}))
+
 (defn run-commands 
   "Create sequence of states for each command. Ends if there is an invalid move,
 board is full, commands run out, units run out"
   [task seed commands]
-  (let [source (create-source task seed)
-        board (create-board task)
-        unit (spawn-unit board (first source))]
-    (reductions (fn [state cmd]
-                  (let [res (run-one-command state cmd)]
-                    (if (not (= :running (:status res)))
-                      (reduced res)
-                      res))) 
-                {:board board
-                 :source (rest source)
-                 :unit unit
-                 :lines-cleared 0
-                 :status :running
-                 :seen #{}} commands)))
+  (reductions (fn [state cmd]
+                (let [res (run-one-command state (all-commands cmd))]
+                  (if (not (= :running (:status res)))
+                    (reduced res)
+                    res))) 
+              (initial-state task seed) commands))
 
 ;;;;;;;;;;;;;;; commands;;;;;;;;;;;;;;;;;;;;;;
 (def char->command (reduce merge (map (fn [[s cmd]]
@@ -284,7 +287,7 @@ board is full, commands run out, units run out"
 (defn fitness [task seed individual]
   (if-let [old-fitness (-> individual meta :fitness)]
     old-fitness
-    (let [states (run-commands task seed (map all-commands individual))
+    (let [states (run-commands task seed individual)
         n (count states)
         res (last states)]
     (+ n 
@@ -331,11 +334,60 @@ board is full, commands run out, units run out"
   (def results (map meta (iterate (partial run-generation task seed) population))))
 
 (time (view (ch/xy-plot (range) (map :best-fitness (take 500 results)))))
-(last (map #(dissoc % :seen) (run-commands task 0 (map all-commands (:best-individual (nth results 500))))))
+(last (map #(dissoc % :seen) (run-commands task 0 (:best-individual (nth results 500)))))
   )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;; backtracking ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn- rotational-symmetric? [unit]
+  true)
+(defn- find-applicable-commands [commands unit last-command]
+  (if (nil? last-command)
+    (keys all-commands)
+    (let [cs (set commands)
+          cs (condp = last-command
+               :west (disj cs :east)
+               :east (disj cs :west)
+               :rotate-cw (disj cs :rotate-ccw)
+               :rotate-ccw (disj cs :rotate-cw)
+               cs)]
+      (vec (if (rotational-symmetric? unit)
+            (disj cs :rotate-cw :rotate-ccw)
+            cs)))))
+
+(defn generate-via-backtracking [task seed max-steps]
+  (loop [cmds (list)
+         stack (list (initial-state task seed)) 
+         n 0] 
+    (if (= n max-steps)
+      (reverse cmds)
+      (let [state (first stack)
+            last-cmd (first cmds)
+            next-cmd (rand-nth (find-applicable-commands (keys all-commands) (:unit state) last-cmd))] 
+        (condp = (:status state)
+          :no-more-units (reverse cmds) ;done
+          :board-full (recur (pop cmds) (pop stack) (inc n)) ;done or backtrack? tricky...
+          :duplicate-board (recur (pop cmds) (pop stack) (inc n))
+          :out-of-bounds (recur (pop cmds) (pop stack) (inc n))
+          ; else run next random command
+          (recur (conj cmds next-cmd)
+                 (conj stack (run-one-command state (all-commands next-cmd)))
+                 (inc n)))))))
+
+(comment
+  (def trivial-task (assoc task :width 2 
+                           :height 5 
+                           :units [{:members [{:x 0, :y 0}],
+                                    :pivot {:x 0, :y 0}}]))
+  (time (def cmds (generate-via-backtracking trivial-task seed 10000)))
+  (let [s (last (run-commands trivial-task seed cmds))] 
+    (println "cleared:" (:lines-cleared s))
+    (print-board (add-to-board (:board s) (:unit s))))
+  )
+
 (comment
   (def problems (load-problems))
   (def task (nth problems 0))
+  (def seed 0)
   (def b (board task))
   (def units (mapv create-unit (:units task)))
   (doseq [[task-idx task] (map vector (range) problems)]
@@ -349,7 +401,7 @@ board is full, commands run out, units run out"
         task (first problems)
         seed (first (:sourceSeeds task))
         seed 0] 
-    (last (run-commands (assoc task :sourceLength 5) seed (repeatedly #(rand-nth [south-east south-west ])))))
+    (last (run-commands (assoc task :sourceLength 5) seed (repeatedly #(rand-nth [:south-east :south-west ])))))
   ;; from video
   (def task (parse "http://icfpcontest.org/problems/problem_6.json"))
   (let [
